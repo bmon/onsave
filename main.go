@@ -11,25 +11,22 @@ import (
 	"os/exec"
 
 	"github.com/fatih/color"
-	"github.com/fsnotify/fsnotify"
+	"github.com/radovskyb/watcher"
 )
 
-var watcher *fsnotify.Watcher
+var w *watcher.Watcher
 
 func main() {
 	if len(os.Args) <= 1 {
 		log.Fatal("usage: onsave <command> [args]")
 	}
 	// create watcher and terminate if there is any error
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer watcher.Close()
+	w = watcher.New()
+	defer w.Close()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		err = watcher.Add(scanner.Text())
+		err := w.Add(scanner.Text())
 		if err != nil {
 			log.Println("Error:", err.Error())
 		} else {
@@ -37,36 +34,42 @@ func main() {
 		}
 	}
 
-	mainLoop(watcher, os.Args[1], os.Args[2:]...)
-
-	log.Printf("exited")
+	mainLoop(w, os.Args[1], os.Args[2:]...)
 }
 
-func mainLoop(watcher *fsnotify.Watcher, callbackCommand string, callbackArgs ...string) {
-	timeout := 5 * time.Second
+func mainLoop(w *watcher.Watcher, callbackCommand string, callbackArgs ...string) {
+	timeout := time.Second
 	reset := time.Now().Add(-timeout)
 	bold := color.New(color.Bold)
-	for {
-		select {
-		case event, _ := <-watcher.Events:
-			// I have a weird bug where files drop off the watcher after an event is read
-			watcher.Add(event.Name)
+	go func() {
+		for {
+			select {
+			case event := <-w.Event:
+				// only run at most once every `timeout` seconds
+				log.Println("event:", event)
+				if reset.Add(timeout).Before(time.Now()) {
 
-			// only run at most once every `timeout` seconds
-			log.Println("event:", event)
-			if reset.Add(timeout).Before(time.Now()) {
-				reset = time.Now()
+					bold.Println("$", callbackCommand, strings.Join(callbackArgs, " "))
 
-				bold.Println("$", callbackCommand, strings.Join(callbackArgs, " "))
+					cmd := exec.Command(callbackCommand, callbackArgs...)
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+					cmd.Run()
+					bold.Println("command finished executing")
+					reset = time.Now()
+				}
 
-				cmd := exec.Command(callbackCommand, callbackArgs...)
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				cmd.Start()
+			case err := <-w.Error:
+				log.Println("error:", err)
+
+			case <-w.Closed:
+				return
 			}
-
-		case err, _ := <-watcher.Errors:
-			log.Println("error:", err)
 		}
+	}()
+
+	go w.TriggerEvent(watcher.Write, nil)
+	if err := w.Start(time.Millisecond * 100); err != nil {
+		log.Fatalln(err)
 	}
 }
