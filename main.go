@@ -6,11 +6,10 @@ import (
 	"log"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"os/exec"
-
-	humanize "github.com/dustin/go-humanize"
 
 	"github.com/fatih/color"
 	"github.com/radovskyb/watcher"
@@ -43,8 +42,8 @@ func mainLoop(w *watcher.Watcher, callbackCommand string, callbackArgs ...string
 	timeout := time.Second
 	reset := time.Now().Add(-timeout)
 	bold := color.New(color.Bold)
-	spinnerChan := make(chan string)
-	go spinner(spinnerChan)
+
+	var cmd *exec.Cmd
 
 	go func() {
 		for {
@@ -53,16 +52,26 @@ func mainLoop(w *watcher.Watcher, callbackCommand string, callbackArgs ...string
 				// only run at most once every `timeout` seconds
 				log.Println("event:", event)
 				if reset.Add(timeout).Before(time.Now()) {
+					if cmd != nil {
+						bold.Println("File change detected. Restarting process...")
+						// signal the process to quit, and kill it after a timeout.
+						go func() {
+							time.Sleep(5 * time.Second)
+							_ = cmd.Process.Signal(os.Kill)
+						}()
+						cmd.Process.Signal(syscall.SIGTERM)
+
+						// wait on the process to exit
+						if err := cmd.Wait(); err != nil {
+							bold.Println("[WARN] error occured while restarting process:", err)
+						}
+					}
 
 					bold.Println("$", callbackCommand, strings.Join(callbackArgs, " "))
-					spinnerChan <- "bar"
-
-					cmd := exec.Command(callbackCommand, callbackArgs...)
+					cmd = exec.Command(callbackCommand, callbackArgs...)
 					cmd.Stdout = os.Stdout
 					cmd.Stderr = os.Stderr
-					cmd.Run()
-					spinnerChan <- "spin"
-					bold.Println("command finished executing")
+					cmd.Start()
 					reset = time.Now()
 				}
 
@@ -78,43 +87,5 @@ func mainLoop(w *watcher.Watcher, callbackCommand string, callbackArgs ...string
 	go w.TriggerEvent(watcher.Write, nil)
 	if err := w.Start(time.Millisecond * 100); err != nil {
 		log.Fatalln(err)
-	}
-}
-
-func spinner(modeChan chan string) {
-	mode := "spin"
-	reset := time.Now()
-	spinners := []string{"|", "/", "-", "\\"}
-	index := 0
-	barIndex := 0
-	barLen := 12
-	barBlob := 6
-	direction := 1
-
-	yellow := color.New(color.FgYellow)
-
-	for {
-		select {
-		case mode = <-modeChan:
-			index = 0
-			barIndex = 0
-			reset = time.Now()
-		default:
-			if mode == "spin" {
-				index = (index + 1) % len(spinners)
-
-				yellow.Print(spinners[index], " Last updated ", humanize.Time(reset), "\r")
-			} else {
-				if (direction == 1 && (barIndex+barBlob) == barLen) || direction == -1 && barIndex == 0 {
-					direction = direction * -1
-				}
-				barIndex += direction
-
-				blobString := strings.Repeat(" ", barIndex) + strings.Repeat("=", barBlob) + strings.Repeat(" ", barLen-(barIndex+barBlob))
-				yellow.Printf("[%s]\r", blobString)
-			}
-			time.Sleep(time.Millisecond * 150)
-		}
-
 	}
 }

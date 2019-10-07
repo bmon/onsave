@@ -9,3 +9,5 @@ require (
 	github.com/radovskyb/watcher v1.0.5
 	golang.org/x/sys v0.0.0-20190114130336-2be517255631 // indirect
 )
+
+go 1.13
