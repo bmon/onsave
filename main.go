@@ -58,12 +58,12 @@ func mainLoop(w *watcher.Watcher, callbackCommand string, callbackArgs ...string
 						go func() {
 							time.Sleep(5 * time.Second)
 							_ = cmd.Process.Signal(os.Kill)
+							if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+								bold.Printf("[WARN] Kill %d, %d returned error: %s\n", cmd.Process.Pid, syscall.SIGKILL, err)
+							}
 						}()
-						cmd.Process.Signal(syscall.SIGTERM)
-
-						// wait on the process to exit
-						if err := cmd.Wait(); err != nil {
-							bold.Println("[WARN] error occured while restarting process:", err)
+						if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+							bold.Printf("[WARN] Kill %d, %d returned error: %s\n", cmd.Process.Pid, syscall.SIGTERM, err)
 						}
 					}
 
@@ -71,6 +71,7 @@ func mainLoop(w *watcher.Watcher, callbackCommand string, callbackArgs ...string
 					cmd = exec.Command(callbackCommand, callbackArgs...)
 					cmd.Stdout = os.Stdout
 					cmd.Stderr = os.Stderr
+					cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 					cmd.Start()
 					reset = time.Now()
 				}
